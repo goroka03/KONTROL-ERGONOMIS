@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32-CAM Controller</title>
+
+<!-- MQTT.js via CDN — WebSocket support -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg:       #0d0f14;
+    --surface:  #161a23;
+    --border:   #252a38;
+    --accent:   #00e5a0;
+    --danger:   #ff4d6d;
+    --warn:     #ffb830;
+    --text:     #e4e8f0;
+    --muted:    #5a6380;
+    --on:       #00e5a0;
+    --off:      #3a3f52;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px 60px;
+  }
+
+  /* ── Header ── */
+  header {
+    width: 100%;
+    max-width: 520px;
+    margin-bottom: 28px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px;
+  }
+  header h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+  }
+  header p {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ── Connection badge ── */
+  #conn-badge {
+    font-size: 10px;
+    letter-spacing: .08em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    margin-top: 8px;
+    transition: border-color .3s;
+  }
+  #conn-badge .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background .3s, box-shadow .3s;
+  }
+  #conn-badge.online  { border-color: var(--accent); }
+  #conn-badge.online  .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  #conn-badge.offline { border-color: var(--danger); }
+  #conn-badge.offline .dot { background: var(--danger); }
+
+  /* ── MQTT info bar ── */
+  .mqtt-bar {
+    width: 100%;
+    max-width: 520px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .mqtt-bar .broker-label { color: var(--accent); font-weight: 700; margin-right: 4px; }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    width: 100%;
+    max-width: 520px;
+    margin-bottom: 16px;
+  }
+  .card-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  /* ── Timestamp inputs ── */
+  .ts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .ts-field label {
+    font-size: 10px;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 4px;
+  }
+  .ts-field input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    padding: 8px 10px;
+    outline: none;
+    text-align: center;
+    transition: border-color .2s;
+  }
+  .ts-field input:focus { border-color: var(--accent); }
+  .ts-apply {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+  }
+  .ts-apply:hover { background: var(--accent); color: #000; }
+
+  /* ── Capture button ── */
+  .btn-capture {
+    width: 100%;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 10px;
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: .04em;
+    padding: 16px;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-capture:active { transform: scale(.98); }
+  .btn-capture:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-capture::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,.15);
+    opacity: 0;
+    transition: opacity .15s;
+  }
+  .btn-capture:hover:not(:disabled)::after { opacity: 1; }
+
+  /* ── Toggle buttons ── */
+  .btn-toggle {
+    width: 100%;
+    border-radius: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 14px 16px;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all .2s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .btn-toggle .toggle-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .btn-toggle .sub { font-size: 10px; opacity: .7; margin-top: 2px; }
+
+  .state-off  { background: var(--bg); border-color: var(--border); color: var(--muted); }
+  .state-grn  { background: rgba(0,229,160,.08); border-color: var(--accent); color: var(--accent); }
+  .state-wrn  { background: rgba(255,184,48,.08); border-color: var(--warn); color: var(--warn); }
+
+  /* ── IO4 status bar ── */
+  .io4-bar {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-top: 4px;
+  }
+  .io4-state {
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+  .io4-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    background: var(--off);
+    transition: background .3s, box-shadow .3s;
+  }
+  .io4-dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .io4-reason { font-size: 10px; color: var(--muted); }
+
+  /* ── Feedback toast ── */
+  #toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    font-size: 12px;
+    color: var(--text);
+    transition: transform .3s ease;
+    z-index: 99;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); }
+  #toast.ok   { border-color: var(--accent); color: var(--accent); }
+  #toast.err  { border-color: var(--danger); color: var(--danger); }
+  #toast.info { border-color: var(--warn);   color: var(--warn); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ESP32-CAM // Controller</h1>
+  <p>prototipe-ta &middot; MQTT Cloud &middot; IO4 monitor</p>
+  <div id="conn-badge"><span class="dot"></span><span id="conn-text">connecting…</span></div>
+</header>
+
+<!-- MQTT broker info (read-only, tidak perlu diubah user) -->
+<div class="mqtt-bar">
+  <span class="broker-label">MQTT</span>
+  <span id="broker-info">HiveMQ · 29c16f2c9b2743feb4aff0e747569092.s1.eu.hivemq.cloud:8884</span>
+</div>
+
+<!-- Timestamp -->
+<div class="card">
+  <div class="card-label">⏱ Timestamp Manual</div>
+  <div class="ts-grid">
+    <div class="ts-field">
+      <label>TANGGAL (DD)</label>
+      <input type="number" id="ts-day"   min="1"  max="31"   placeholder="22" />
+    </div>
+    <div class="ts-field">
+      <label>BULAN (MM)</label>
+      <input type="number" id="ts-month" min="1"  max="12"   placeholder="07" />
+    </div>
+    <div class="ts-field">
+      <label>TAHUN (YYYY)</label>
+      <input type="number" id="ts-year"  min="2020" max="2099" placeholder="2025" />
+    </div>
+    <div class="ts-field">
+      <label>JAM</label>
+      <input type="number" id="ts-hour"  min="0"  max="23"   placeholder="14" />
+    </div>
+    <div class="ts-field">
+      <label>MENIT</label>
+      <input type="number" id="ts-min"   min="0"  max="59"   placeholder="30" />
+    </div>
+    <div class="ts-field">
+      <label>DETIK</label>
+      <input type="number" id="ts-sec"   min="0"  max="59"   placeholder="00" />
+    </div>
+  </div>
+  <button class="ts-apply" onclick="applyTimestamp()">▶ Terapkan Timestamp</button>
+</div>
+
+<!-- Capture -->
+<div class="card">
+  <div class="card-label">📷 Capture</div>
+  <button class="btn-capture" id="btn-capture" onclick="doCapture()">AMBIL FOTO</button>
+</div>
+
+<!-- IO4 toggles + status -->
+<div class="card">
+  <div class="card-label">⚡ IO4 Control</div>
+
+  <button class="btn-toggle state-off" id="btn-io4" onclick="toggleIO4()">
+    <div>
+      <div>Toggle IO4 Manual</div>
+      <div class="sub" id="io4-sublabel">OFF — IO4 tidak diaktifkan manual</div>
+    </div>
+    <div class="toggle-dot"></div>
+  </button>
+
+  <button class="btn-toggle state-wrn" id="btn-bayar" onclick="toggleBayar()">
+    <div>
+      <div id="bayar-text">BELUM BAYAR</div>
+      <div class="sub" id="bayar-sublabel">Tekan untuk ubah status</div>
+    </div>
+    <div class="toggle-dot"></div>
+  </button>
+
+  <div class="io4-bar">
+    <div class="io4-state">
+      <span class="io4-dot" id="io4-dot"></span>
+      <span id="io4-state-text">IO4 = LOW</span>
+    </div>
+    <div class="io4-reason" id="io4-reason">Menunggu data dari ESP32…</div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  MQTT CONFIG  (sesuaikan kalau ganti broker)
+// ════════════════════════════════════════════════════════
+const BROKER_HOST = '29c16f2c9b2743feb4aff0e747569092.s1.eu.hivemq.cloud';
+const BROKER_PORT = 8884;          // WebSocket TLS
+const MQTT_USER   = 'Goroka';
+const MQTT_PASS   = 'Goroka123';
+const CLIENT_ID   = 'webclient-' + Math.random().toString(16).slice(2, 8);
+
+// Topics (harus sama persis dengan yang di .ino)
+const T_STATUS       = 'esp32cam/status';
+const T_CAPTURE      = 'esp32cam/cmd/capture';
+const T_SETTIME      = 'esp32cam/cmd/settime';
+const T_TOGGLEIO4    = 'esp32cam/cmd/toggleio4';
+const T_TOGGLEBAYAR  = 'esp32cam/cmd/togglebayar';
+// ════════════════════════════════════════════════════════
+
+let mqttClient = null;
+let state = { io4: false, io4Manual: false, autoTrigger: false, statusBayar: 'belum' };
+
+// ── Toast ──────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ''; }, 2800);
+}
+
+// ── Connection badge ───────────────────────────────────
+function setConnected(ok, extra = '') {
+  const badge = document.getElementById('conn-badge');
+  const text  = document.getElementById('conn-text');
+  badge.className = ok ? 'online' : 'offline';
+  text.textContent = ok ? ('online · ' + (extra || 'HiveMQ')) : 'disconnected';
+}
+
+// ── Init MQTT ──────────────────────────────────────────
+function initMQTT() {
+  const url = `wss://${BROKER_HOST}:${BROKER_PORT}/mqtt`;
+  mqttClient = mqtt.connect(url, {
+    clientId:  CLIENT_ID,
+    username:  MQTT_USER,
+    password:  MQTT_PASS,
+    clean:     true,
+    reconnectPeriod: 4000,
+    connectTimeout:  10000,
+    keepalive: 30,
+    rejectUnauthorized: false
+  });
+
+  mqttClient.on('connect', () => {
+    console.log('MQTT connected');
+    setConnected(true);
+    showToast('MQTT terhubung ke HiveMQ', 'ok');
+    mqttClient.subscribe(T_STATUS, { qos: 1 });
+  });
+
+  mqttClient.on('reconnect', () => {
+    setConnected(false);
+    document.getElementById('conn-text').textContent = 'reconnecting…';
+  });
+
+  mqttClient.on('offline', () => {
+    setConnected(false);
+    showToast('MQTT offline', 'err');
+  });
+
+  mqttClient.on('error', (err) => {
+    console.error('MQTT error:', err.message);
+    setConnected(false);
+  });
+
+  mqttClient.on('message', (topic, payload) => {
+    if (topic === T_STATUS) {
+      try {
+        state = JSON.parse(payload.toString());
+        updateUI();
+      } catch(e) {
+        console.warn('Invalid JSON from status topic:', payload.toString());
+      }
+    }
+  });
+}
+
+// ── Publish helper ─────────────────────────────────────
+function publish(topic, msg = '1') {
+  if (!mqttClient || !mqttClient.connected) {
+    showToast('MQTT belum konek', 'err');
+    return false;
+  }
+  mqttClient.publish(topic, msg, { qos: 1 });
+  return true;
+}
+
+// ── Actions ────────────────────────────────────────────
+function doCapture() {
+  const btn = document.getElementById('btn-capture');
+  if (!publish(T_CAPTURE)) return;
+  btn.disabled = true;
+  btn.textContent = 'MENGIRIM…';
+  showToast('📷 Perintah foto terkirim!', 'ok');
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = 'AMBIL FOTO';
+  }, 3000);
+}
+
+function applyTimestamp() {
+  const d  = String(document.getElementById('ts-day').value  || '').padStart(2, '0');
+  const mo = String(document.getElementById('ts-month').value || '').padStart(2, '0');
+  const y  = document.getElementById('ts-year').value  || '';
+  const H  = String(document.getElementById('ts-hour').value || 0).padStart(2, '0');
+  const M  = String(document.getElementById('ts-min').value  || 0).padStart(2, '0');
+  const S  = String(document.getElementById('ts-sec').value  || 0).padStart(2, '0');
+
+  if (!y || !mo || !d) { showToast('Lengkapi tanggal dulu', 'err'); return; }
+
+  // format payload: "yyyyMMdd HHmmss"
+  const payload = y + mo + d + ' ' + H + M + S;
+  if (publish(T_SETTIME, payload)) {
+    showToast('Timestamp: ' + payload, 'ok');
+  }
+}
+
+function toggleIO4() {
+  publish(T_TOGGLEIO4);
+}
+
+function toggleBayar() {
+  publish(T_TOGGLEBAYAR);
+}
+
+// ── Update UI dari state ───────────────────────────────
+function updateUI() {
+  // Button IO4 Manual
+  const btnIO4  = document.getElementById('btn-io4');
+  const io4Sub  = document.getElementById('io4-sublabel');
+  if (state.io4Manual) {
+    btnIO4.className = 'btn-toggle state-grn';
+    io4Sub.textContent = 'ON — IO4 aktif via manual';
+  } else {
+    btnIO4.className = 'btn-toggle state-off';
+    io4Sub.textContent = 'OFF — IO4 tidak diaktifkan manual';
+  }
+
+  // Button Status Bayar
+  const btnBayar  = document.getElementById('btn-bayar');
+  const bayarText = document.getElementById('bayar-text');
+  const bayarSub  = document.getElementById('bayar-sublabel');
+  const sudah     = (state.statusBayar === 'sudah');
+  bayarText.textContent = sudah ? 'SUDAH BAYAR' : 'BELUM BAYAR';
+  if (sudah) {
+    btnBayar.className = 'btn-toggle state-grn';
+    bayarSub.textContent = 'Sudah bayar — auto-trigger IO4 tidak aktif';
+  } else {
+    btnBayar.className = 'btn-toggle state-wrn';
+    bayarSub.textContent = 'Belum bayar — bisa trigger IO4 otomatis';
+  }
+
+  // IO4 status dot
+  const dot    = document.getElementById('io4-dot');
+  const stText = document.getElementById('io4-state-text');
+  const reason = document.getElementById('io4-reason');
+
+  if (state.io4) {
+    dot.classList.add('active');
+    stText.textContent = 'IO4 = HIGH (aktif)';
+  } else {
+    dot.classList.remove('active');
+    stText.textContent = 'IO4 = LOW (tidak aktif)';
+  }
+
+  let reasons = [];
+  if (state.io4Manual)   reasons.push('Toggle manual ON');
+  if (state.autoTrigger) reasons.push('Tanggal ≥ 22 & belum bayar');
+  reason.textContent = reasons.length
+    ? 'Aktif karena: ' + reasons.join(' + ')
+    : 'Tidak ada kondisi yang memenuhi → IO4 tetap LOW';
+}
+
+// ── Boot ───────────────────────────────────────────────
+initMQTT();
+</script>
+</body>
+</html>
