@@ -426,11 +426,19 @@ function initMQTT() {
 
   mqttClient.on('message', (topic, payload) => {
     if (topic === T_STATUS) {
+      const raw = payload.toString().trim();
+      if (!raw) return; // abaikan pesan kosong (retained clear)
       try {
-        state = JSON.parse(payload.toString());
+        const parsed = JSON.parse(raw);
+        state = parsed;
         updateUI();
+
+        // Deteksi upload sukses dari ESP32
+        if (parsed.uploadDone) {
+          onUploadSuccess(parsed.uploadDone);
+        }
       } catch(e) {
-        console.warn('Invalid JSON from status topic:', payload.toString());
+        console.warn('Invalid JSON from status topic:', raw);
       }
     }
   });
@@ -530,6 +538,104 @@ function updateUI() {
   reason.textContent = reasons.length
     ? 'Aktif karena: ' + reasons.join(' + ')
     : 'Tidak ada kondisi yang memenuhi → IO4 tetap LOW';
+}
+
+
+// ════════════════════════════════════════════════════════
+//  INTEGRASI — Tulis ke Spreadsheet setelah foto sukses
+// ════════════════════════════════════════════════════════
+
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz9QQJN5kPsIcEeVX8HPptnHi64qMOqKWX4EI-Vx1NQJQc3nJm7T797GbPbeBovT2bg/exec";
+
+// kWh list — index sama dengan meter_monitor
+const KWH_LIST = [22667.1, 22674.3, 22695.0, 22703.0, 22710.3, 22726.5, 22751.9, 22765.9, 22773.5, 22782.9, 22793.5];
+
+let lastCaptureFile = null;
+let captureInProgress  = false;
+
+// ── Baca kWh dari Firebase REST API (tidak pakai import, aman di file://) ──
+async function getLatestKwh() {
+  try {
+    // Firebase REST API — tidak butuh SDK, tidak kena blokir file://
+    const url = "https://firestore.googleapis.com/v1/projects/plastisin-test/databases/(default)/documents/meter/state-v3?key=AIzaSyAsKlccPcg0HX5PeGp-Q7kvzozmyadqVlk";
+    const res  = await fetch(url);
+    const json = await res.json();
+    const idx  = parseInt(json?.fields?.imgIndex?.integerValue ?? json?.fields?.imgIndex?.doubleValue ?? 0);
+    console.log('Firebase imgIndex:', idx, '→ kWh:', KWH_LIST[idx]);
+    return KWH_LIST[idx] ?? KWH_LIST[0];
+  } catch (e) {
+    console.warn('Firebase REST gagal, fallback kWh[0]:', e);
+    return KWH_LIST[0];
+  }
+}
+
+// ── Format timestamp lokal ───────────────────────────────────
+function nowTimestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+// ── Kirim ke Spreadsheet via Apps Script (GET = tidak kena CORS file://) ────
+async function logToSpreadsheet(kwh, filename, timestamp) {
+  try {
+    showToast('📊 Mencatat ke Spreadsheet…', 'info');
+    // Pakai GET + URL params — satu-satunya cara yang konsisten dari file://
+    const params = new URLSearchParams({
+      ts:     timestamp,
+      kwh:    kwh,
+      file:   filename,
+      status: 'OK'
+    });
+    const url = APPS_SCRIPT_URL + '?' + params.toString();
+    const res  = await fetch(url, { method: 'GET', mode: 'cors' });
+    const json = await res.json();
+    if (json.ok) {
+      showToast('✅ Tersimpan: ' + kwh + ' kWh', 'ok');
+      console.log('✅ Spreadsheet OK:', json);
+    } else {
+      showToast('⚠️ Apps Script: ' + (json.error || 'unknown'), 'info');
+      console.warn('Apps Script warn:', json);
+    }
+  } catch (e) {
+    showToast('❌ Gagal kirim: ' + e.message, 'err');
+    console.error('Spreadsheet error:', e);
+  }
+}
+
+// ── Handler utama: dipanggil saat ESP32 konfirmasi sukses ────
+// Dipicu dari mqttCallback saat topic status mengandung uploadDone
+let lastRecordedAt = 0;
+
+async function onUploadSuccess(filename) {
+  if (!filename) return;
+
+  const now = Date.now();
+
+  // Client-side: blokir kalau < 10 detik dari trigger sebelumnya
+  // (Server-side Apps Script punya guard 60 detik sebagai safety net)
+  if (now - lastRecordedAt < 10000) {
+    console.log('Client cooldown aktif, skip');
+    return;
+  }
+  lastRecordedAt = now;
+
+  try {
+    const ts  = nowTimestamp();
+    const kwh = await getLatestKwh();
+    // Tambah timestamp browser ke filename biar selalu unik
+    // walau ESP32 belum diset jam-nya
+    const pad = n => String(n).padStart(2,'0');
+    const d = new Date();
+    const uniqueSuffix = String(d.getFullYear()) + pad(d.getMonth()+1) + pad(d.getDate())
+                       + '_' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+    const uniqueFile = filename.replace('.jpg','') + '_' + uniqueSuffix + '.jpg';
+    await logToSpreadsheet(kwh, uniqueFile, ts);
+    console.log('Logged:', ts, kwh, uniqueFile);
+  } catch(e) {
+    lastRecordedAt = 0;
+    console.error('onUploadSuccess error:', e);
+  }
 }
 
 // ── Boot ───────────────────────────────────────────────
